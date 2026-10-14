@@ -1,0 +1,4 @@
+*
+
+!app/
+!gunicorn.conf.py

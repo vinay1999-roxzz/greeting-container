@@ -1,18 +1,49 @@
-FROM python:3.12@sha256:63828510c8b5ccce3bf0d6fabd6f3d17d4effa1ffe690f80a67c8e2d394e03ee
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    gcc \
-    curl \
-    vim
+ARG PYTHON_IMAGE=python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+
+FROM ${PYTHON_IMAGE} AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+COPY app/requirements.txt /tmp/requirements.txt
+
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+
+FROM ${PYTHON_IMAGE} AS runtime
+
+ARG IMAGE_SOURCE="https://github.com/vinay1999-roxzz/greeting-container"
+ARG IMAGE_REVISION="unknown"
+
+LABEL org.opencontainers.image.title="sample-app" \
+      org.opencontainers.image.description="Sample Flask greeting app served by gunicorn" \
+      org.opencontainers.image.source="${IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${IMAGE_REVISION}" \
+      org.opencontainers.image.licenses="MIT"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    PORT=8080
+
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app
+
+COPY --from=builder /opt/venv /opt/venv
 
 WORKDIR /app
 
-COPY . .
+COPY app/ /app/
+COPY gunicorn.conf.py /app/gunicorn.conf.py
 
-RUN pip install -r app/requirements.txt
+USER 10001:10001
 
 EXPOSE 8080
 
-# The whole context was copied to /app, so the app package lives in /app/app.
-CMD ["gunicorn", "--chdir", "app", "--bind", "0.0.0.0:8080", "--workers", "2", "app:app"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["python", "-c", "import os,urllib.request,sys;p=os.environ.get('PORT','8080');sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/healthz',timeout=2).status==200 else 1)"]
+
+CMD ["gunicorn", "app:app"]
